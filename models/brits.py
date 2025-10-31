@@ -11,10 +11,17 @@ import utils
 import argparse
 import data_loader
 
-import rits
+from . import rits
 from sklearn import metrics
 
-from ipdb import set_trace
+try:
+    from ipdb import set_trace
+except Exception:
+    try:
+        from pdb import set_trace
+    except Exception:
+        def set_trace():
+            return None
 
 SEQ_LEN = 36
 RNN_HID_SIZE = 64

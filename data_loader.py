@@ -1,7 +1,10 @@
 import os
 import time
 
-import ujson as json
+try:
+    import ujson as json
+except Exception:
+    import json
 import numpy as np
 import pandas as pd
 
@@ -11,8 +14,10 @@ from torch.utils.data import Dataset, DataLoader
 
 class MySet(Dataset):
     def __init__(self):
-        super(MySet, self).__init__()
-        self.content = open('./json/json').readlines()
+        super().__init__()
+        # use context manager to open file
+        with open('./json/json', 'r') as f:
+            self.content = f.readlines()
 
         indices = np.arange(len(self.content))
         val_indices = np.random.choice(indices, len(self.content) // 5)
@@ -31,24 +36,34 @@ class MySet(Dataset):
         return rec
 
 def collate_fn(recs):
-    forward = map(lambda x: x['forward'], recs)
-    backward = map(lambda x: x['backward'], recs)
+    forward = [x['forward'] for x in recs]
+    backward = [x['backward'] for x in recs]
 
     def to_tensor_dict(recs):
-        values = torch.FloatTensor(map(lambda r: map(lambda x: x['values'], r), recs))
-        masks = torch.FloatTensor(map(lambda r: map(lambda x: x['masks'], r), recs))
-        deltas = torch.FloatTensor(map(lambda r: map(lambda x: x['deltas'], r), recs))
-        forwards = torch.FloatTensor(map(lambda r: map(lambda x: x['forwards'], r), recs))
+        # recs: list of sequences where each element is a dict-like with lists
+        # Build CPU tensors here. DataLoader will pin memory if pin_memory=True.
+        values = torch.FloatTensor([[x['values'] for x in r] for r in recs])
+        masks = torch.FloatTensor([[x['masks'] for x in r] for r in recs])
+        deltas = torch.FloatTensor([[x['deltas'] for x in r] for r in recs])
+        forwards = torch.FloatTensor([[x['forwards'] for x in r] for r in recs])
 
-        evals = torch.FloatTensor(map(lambda r: map(lambda x: x['evals'], r), recs))
-        eval_masks = torch.FloatTensor(map(lambda r: map(lambda x: x['eval_masks'], r), recs))
+        evals = torch.FloatTensor([[x['evals'] for x in r] for r in recs])
+        eval_masks = torch.FloatTensor([[x['eval_masks'] for x in r] for r in recs])
 
-        return {'values': values, 'forwards': forwards, 'masks': masks, 'deltas': deltas, 'evals': evals, 'eval_masks': eval_masks}
+        return {
+            'values': values,
+            'forwards': forwards,
+            'masks': masks,
+            'deltas': deltas,
+            'evals': evals,
+            'eval_masks': eval_masks
+        }
 
     ret_dict = {'forward': to_tensor_dict(forward), 'backward': to_tensor_dict(backward)}
 
-    ret_dict['labels'] = torch.FloatTensor(map(lambda x: x['label'], recs))
-    ret_dict['is_train'] = torch.FloatTensor(map(lambda x: x['is_train'], recs))
+    # labels and is_train as CPU tensors; training loop will move them to device
+    ret_dict['labels'] = torch.FloatTensor([x['label'] for x in recs])
+    ret_dict['is_train'] = torch.FloatTensor([x['is_train'] for x in recs])
 
     return ret_dict
 

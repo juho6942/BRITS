@@ -11,7 +11,14 @@ import utils
 import argparse
 import data_loader
 
-from ipdb import set_trace
+try:
+    from ipdb import set_trace
+except Exception:
+    try:
+        from pdb import set_trace
+    except Exception:
+        def set_trace():
+            return None
 from sklearn import metrics
 
 SEQ_LEN = 49
