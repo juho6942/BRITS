@@ -98,8 +98,9 @@ class TemporalDecay(nn.Module):
         return gamma
 
 class Model(nn.Module):
-    def __init__(self,features=35):
+    def __init__(self, features=35, imputation_only=False):
         super(Model, self).__init__()
+        self.imputation_only = imputation_only
         self.build(features)
 
     def build(self, features):
@@ -114,7 +115,10 @@ class Model(nn.Module):
         self.weight_combine = nn.Linear(features * 2, features)
 
         self.dropout = nn.Dropout(p = 0.25)
-        self.out = nn.Linear(RNN_HID_SIZE, 1)
+        
+        # Only create output layer if not imputation_only
+        if not self.imputation_only:
+            self.out = nn.Linear(RNN_HID_SIZE, 1)
 
     def forward(self, data, direct):
         # Original sequence with 24 time steps
@@ -125,8 +129,18 @@ class Model(nn.Module):
         evals = data[direct]['evals']
         eval_masks = data[direct]['eval_masks']
 
-        labels = data['labels'].view(-1, 1)
-        is_train = data['is_train'].view(-1, 1)
+        # Only use labels/is_train if not imputation_only mode
+        if not self.imputation_only:
+            labels = data['labels'].view(-1, 1)
+            is_train = data['is_train'].view(-1, 1)
+        else:
+            # Create dummy labels/is_train for imputation-only mode
+            batch_size = values.size()[0]
+            labels = torch.zeros((batch_size, 1))
+            is_train = torch.ones((batch_size, 1))
+            if torch.cuda.is_available():
+                labels = labels.cuda()
+                is_train = is_train.cuda()
 
         h = Variable(torch.zeros((values.size()[0], RNN_HID_SIZE)))
         c = Variable(torch.zeros((values.size()[0], RNN_HID_SIZE)))
@@ -172,13 +186,21 @@ class Model(nn.Module):
 
         imputations = torch.cat(imputations, dim = 1)
 
-        y_h = self.out(h)
-        y_loss = binary_cross_entropy_with_logits(y_h, labels, reduce = False)
-        y_loss = torch.sum(y_loss * is_train) / (torch.sum(is_train) + 1e-5)
+        # Only compute classification loss if not imputation_only mode
+        if not self.imputation_only:
+            y_h = self.out(h)
+            y_loss = binary_cross_entropy_with_logits(y_h, labels, reduce = False)
+            y_loss = torch.sum(y_loss * is_train) / (torch.sum(is_train) + 1e-5)
+            y_h = F.sigmoid(y_h)
+            total_loss = x_loss / SEQ_LEN + y_loss * 0.3
+        else:
+            # Imputation-only: no classification
+            y_h = torch.zeros((values.size()[0], 1))
+            if torch.cuda.is_available():
+                y_h = y_h.cuda()
+            total_loss = x_loss / SEQ_LEN
 
-        y_h = F.sigmoid(y_h)
-
-        return {'loss': x_loss / SEQ_LEN + y_loss * 0.3, 'predictions': y_h,\
+        return {'loss': total_loss, 'predictions': y_h,\
                 'imputations': imputations, 'labels': labels, 'is_train': is_train,\
                 'evals': evals, 'eval_masks': eval_masks}
 

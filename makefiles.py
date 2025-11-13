@@ -25,7 +25,8 @@ def norm_data(data):
     data_std = data[feature_cols].std()
 
     data[feature_cols] = (data[feature_cols] - data_mean) / data_std
-    data[missing_mask] = 0
+    # Fill all NaN values (originally missing) with 0
+    data[feature_cols] = data[feature_cols].fillna(0)
     return data,data_std, data_mean, missing_mask
 
 def create_fake_missing(data, missing_mask, missing_rate=0.11):

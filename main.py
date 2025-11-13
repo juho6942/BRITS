@@ -125,7 +125,7 @@ def run():
     if torch is None:
         raise RuntimeError('PyTorch is not installed or could not be imported. Please install torch to run this script.')
 
-    model = getattr(models, args.model).Model()
+    model = getattr(models, args.model).Model(imputation_only=False)
 
     if torch.cuda.is_available():
         model = model.cuda()

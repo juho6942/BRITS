@@ -28,13 +28,15 @@ RNN_HID_SIZE = 64
 
 
 class Model(nn.Module):
-    def __init__(self):
+    def __init__(self, imputation_only=True):
         super(Model, self).__init__()
+        self.imputation_only = imputation_only
         self.build()
 
     def build(self):
-        self.rits_f = rits.Model()
-        self.rits_b = rits.Model()
+        # Pass imputation_only to RITS models
+        self.rits_f = rits.Model(features=11, imputation_only=self.imputation_only)
+        self.rits_b = rits.Model(features=11, imputation_only=self.imputation_only)
 
     def forward(self, data):
         ret_f = self.rits_f(data, 'forward')

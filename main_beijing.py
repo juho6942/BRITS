@@ -88,7 +88,7 @@ def train(model):
          
         if epoch % 1 == 0:
             print(f'\n--- Evaluation at Epoch {epoch} ---')
-            mae, mre = evaluate(model, test_iter)
+            mae, mre = evaluate(model, test_iter, denormalize=True)
             
             # Save best model
             if mae < best_mae:
@@ -97,14 +97,29 @@ def train(model):
                 print(f'✓ New best model saved! MAE: {mae:.6f}\n')
             else:
                 print()  # Empty line for readability
+    
+    # Final evaluation and save predictions
+    print('\n' + '='*60)
+    print('FINAL EVALUATION ON TEST SET')
+    print('='*60)
+    evaluate(model, test_iter, denormalize=True)
+    
+    # Save predictions to CSV
+    print('\nGenerating predictions file...')
+    predict_and_save(model, test_iter, output_file=f'predictions_{args.model}.csv')
 
-def evaluate(model, val_iter):
+def evaluate(model, val_iter, denormalize=True):
     """
     Evaluate model with temporal averaging of imputations.
     
     When the same timestep appears in multiple windows (due to sliding window approach),
     this function averages all imputations for that timestep to get the final prediction.
     This matches the paper's evaluation methodology.
+    
+    Args:
+        model: BRITS model
+        val_iter: DataLoader for validation/test set
+        denormalize: If True, convert predictions back to original scale
     """
     model.eval()
 
@@ -165,22 +180,130 @@ def evaluate(model, val_iter):
     evals = np.asarray(evals)
     imputations = np.asarray(imputations)
     
-    # Calculate metrics
-    mae = np.abs(evals - imputations).mean()
-    mre = np.abs(evals - imputations).sum() / np.abs(evals).sum()
-    
-    print(f'Evaluated {len(evals)} unique masked values')
-    print(f'Average imputations per value: {np.mean([len(v) for v in imputation_dict.values()]):.2f}')
-    print(f'MAE: {mae:.6f}')
-    print(f'MRE: {mre:.6f}')
+    # Denormalize if requested
+    if denormalize:
+        # Get normalization parameters from dataset
+        mean, std = val_iter.dataset.get_normalization_params()
+        
+        # Reshape to (n_samples, n_features) for proper broadcasting
+        n_samples = len(evals) // len(mean)
+        evals_2d = evals.reshape(-1, len(mean))
+        imputations_2d = imputations.reshape(-1, len(mean))
+        
+        # Denormalize: original = normalized * std + mean
+        evals_denorm = evals_2d * std.values + mean.values
+        imputations_denorm = imputations_2d * std.values + mean.values
+        
+        # Flatten back
+        evals_denorm = evals_denorm.flatten()
+        imputations_denorm = imputations_denorm.flatten()
+        
+        # Calculate metrics on denormalized values
+        mae = np.abs(evals_denorm - imputations_denorm).mean()
+        mre = np.abs(evals_denorm - imputations_denorm).sum() / np.abs(evals_denorm).sum()
+        
+        print(f'Evaluated {len(evals)} unique masked values')
+        print(f'Average imputations per value: {np.mean([len(v) for v in imputation_dict.values()]):.2f}')
+        print(f'MAE (original scale): {mae:.4f}')
+        print(f'MRE (original scale): {mre:.6f}')
+        
+        # Also show normalized metrics for comparison
+        mae_norm = np.abs(evals - imputations).mean()
+        mre_norm = np.abs(evals - imputations).sum() / np.abs(evals).sum()
+        print(f'MAE (normalized): {mae_norm:.6f}')
+        print(f'MRE (normalized): {mre_norm:.6f}')
+        
+    else:
+        # Calculate metrics on normalized values (z-scores)
+        mae = np.abs(evals - imputations).mean()
+        mre = np.abs(evals - imputations).sum() / np.abs(evals).sum()
+        
+        print(f'Evaluated {len(evals)} unique masked values')
+        print(f'Average imputations per value: {np.mean([len(v) for v in imputation_dict.values()]):.2f}')
+        print(f'MAE: {mae:.6f}')
+        print(f'MRE: {mre:.6f}')
     
     return mae, mre
+
+def predict_and_save(model, val_iter, output_file='predictions.csv'):
+    """
+    Generate predictions and save to CSV with denormalized values.
+    
+    Args:
+        model: Trained BRITS model
+        val_iter: DataLoader
+        output_file: Path to save predictions
+    """
+    model.eval()
+    
+    # Store all predictions with metadata
+    results = []
+    
+    with torch.no_grad():
+        for batch_idx, data in enumerate(val_iter):
+            data = utils.to_var(data)
+            ret = model.run_on_batch(data, None)
+
+            eval_masks = ret['eval_masks'].data.cpu().numpy()
+            eval_ = ret['evals'].data.cpu().numpy()
+            imputation = ret['imputations'].data.cpu().numpy()
+            
+            batch_size = eval_masks.shape[0]
+            seq_len = eval_masks.shape[1]
+            n_features = eval_masks.shape[2]
+            
+            for b in range(batch_size):
+                sample_idx = batch_idx * val_iter.batch_size + b
+                if sample_idx >= len(val_iter.dataset):
+                    break
+                
+                window_start = val_iter.dataset.window_starts[sample_idx]
+                
+                for t in range(seq_len):
+                    absolute_time = window_start + t
+                    
+                    for f in range(n_features):
+                        if eval_masks[b, t, f] == 1:  # Artificially masked
+                            results.append({
+                                'timestep': absolute_time,
+                                'feature_idx': f,
+                                'feature_name': val_iter.dataset.feature_cols[f],
+                                'true_normalized': eval_[b, t, f],
+                                'pred_normalized': imputation[b, t, f]
+                            })
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(results)
+    
+    # Denormalize values
+    mean, std = val_iter.dataset.get_normalization_params()
+    
+    for idx, row in df.iterrows():
+        feat_name = row['feature_name']
+        df.at[idx, 'true_value'] = row['true_normalized'] * std[feat_name] + mean[feat_name]
+        df.at[idx, 'pred_value'] = row['pred_normalized'] * std[feat_name] + mean[feat_name]
+        df.at[idx, 'absolute_error'] = abs(df.at[idx, 'true_value'] - df.at[idx, 'pred_value'])
+    
+    # Save to CSV
+    df.to_csv(output_file, index=False)
+    print(f'\nPredictions saved to {output_file}')
+    print(f'Columns: {list(df.columns)}')
+    
+    # Print summary statistics by feature
+    print('\n=== Summary by Feature ===')
+    for feat in val_iter.dataset.feature_cols:
+        feat_df = df[df['feature_name'] == feat]
+        mae = feat_df['absolute_error'].mean()
+        print(f'{feat:8s}: MAE = {mae:.4f} (n={len(feat_df)})')
+    
+    return df
 
 def run():
     if torch is None:
         raise RuntimeError('PyTorch is not installed or could not be imported. Please install torch to run this script.')
 
-    model = getattr(models, args.model).Model()
+    # Create model in imputation-only mode (no classification task)
+    model = getattr(models, args.model).Model(imputation_only=True)
 
     if torch.cuda.is_available():
         model = model.cuda()

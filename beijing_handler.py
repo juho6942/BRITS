@@ -35,23 +35,54 @@ class BeijingData(Dataset):
         raw_data = load_beijing_data(file_path)
         self.data, self.data_std, self.data_mean, self.missing_mask = norm_data(raw_data)
         
+        # Get feature columns
+        self.feature_cols = ['PM2.5', 'PM10', 'SO2', 'NO2', 'CO', 'O3', 'TEMP', 'PRES', 'DEWP', 'RAIN', 'WSPM']
+        
+        # Store original normalized values (ground truth for evaluation)
+        # These contain the true values before artificial masking
+        self.original_values = self.data[self.feature_cols].values.copy()
+        
         # Create fake missing data for evaluation
         fake_missing_df, self.fake_missing_mask = create_fake_missing(
             self.data, self.missing_mask, missing_rate=missing_rate
         )
         
-        # Get feature columns
-        self.feature_cols = ['PM2.5', 'PM10', 'SO2', 'NO2', 'CO', 'O3', 'TEMP', 'PRES', 'DEWP', 'RAIN', 'WSPM']
-        
-        # Extract features and metadata as numpy arrays
+        # Extract features with fake missing (NaN where artificially masked)
         # Shape: (time_steps, n_features)
-        self.values = self.data[self.feature_cols].values
+        self.values = fake_missing_df[self.feature_cols].values
         self.original_missing = self.missing_mask[self.feature_cols].values.astype(int)
         self.fake_missing = self.fake_missing_mask[self.feature_cols].values.astype(int)
         self.is_train_flags = self.data['is_train'].values
         
         # Find valid window start indices
         self.indices = start_index(self.data.values, train=is_train)
+        
+        # Store the absolute starting positions for temporal averaging
+        # This allows the evaluate function to map window positions back to absolute time
+        self.window_starts = self.indices
+    
+    def get_normalization_params(self):
+        """
+        Return normalization parameters for denormalizing predictions.
+        
+        Returns:
+            tuple: (mean, std) as pandas Series with feature names as index
+        """
+        return self.data_mean, self.data_std
+    
+    def denormalize(self, normalized_values):
+        """
+        Denormalize values back to original scale.
+        
+        Args:
+            normalized_values: numpy array of normalized values (z-scores)
+        
+        Returns:
+            numpy array of denormalized values in original units
+        """
+        # normalized_values = (original - mean) / std
+        # original = normalized_values * std + mean
+        return normalized_values * self.data_std.values + self.data_mean.values
         
     def __len__(self):
         return len(self.indices)
@@ -62,7 +93,8 @@ class BeijingData(Dataset):
         end_idx = start_idx + 36  # SEQ_LEN = 36
         
         # Extract window data (time_steps=36, features=11)
-        window_values = self.values[start_idx:end_idx, :]  # (36, 11)
+        window_values = self.values[start_idx:end_idx, :]  # (36, 11) - with NaN for masked
+        window_ground_truth = self.original_values[start_idx:end_idx, :]  # (36, 11) - original values
         window_original_missing = self.original_missing[start_idx:end_idx, :]
         window_fake_missing = self.fake_missing[start_idx:end_idx, :]
         window_is_train = self.is_train_flags[start_idx:end_idx]
@@ -72,13 +104,13 @@ class BeijingData(Dataset):
         
         # Create forward sequence
         forward = self._create_sequence(
-            window_values, window_missing, window_fake_missing, 
+            window_values, window_ground_truth, window_missing, window_fake_missing, 
             window_is_train, reverse=False
         )
         
         # Create backward sequence (reverse time)
         backward = self._create_sequence(
-            window_values, window_missing, window_fake_missing,
+            window_values, window_ground_truth, window_missing, window_fake_missing,
             window_is_train, reverse=True
         )
         
@@ -95,14 +127,27 @@ class BeijingData(Dataset):
             'is_train': is_train
         }
     
-    def _create_sequence(self, values, missing_mask, eval_mask, is_train_flags, reverse=False):
-        """Create a sequence dict with values, masks, deltas, evals, eval_masks."""
+    def _create_sequence(self, values, ground_truth, missing_mask, eval_mask, is_train_flags, reverse=False):
+        """Create a sequence dict with values, masks, deltas, evals, eval_masks.
+        
+        Args:
+            values: normalized values with NaN where masked (for model input)
+            ground_truth: original normalized values before masking (for evaluation)
+            missing_mask: combined mask (original + fake missing)
+            eval_mask: fake missing mask (positions to evaluate)
+            is_train_flags: train/test flags
+            reverse: whether to reverse the sequence (for backward pass)
+        """
         seq_len, n_features = values.shape
         
         if reverse:
             values = values[::-1, :].copy()
+            ground_truth = ground_truth[::-1, :].copy()
             missing_mask = missing_mask[::-1, :].copy()
             eval_mask = eval_mask[::-1, :].copy()
+        
+        # Replace NaN with 0 for model input
+        values_filled = np.nan_to_num(values, nan=0.0)
         
         # Compute deltas (time since last observation)
         deltas = np.zeros_like(values)
@@ -117,11 +162,11 @@ class BeijingData(Dataset):
         sequence = []
         for t in range(seq_len):
             timestep = {
-                'values': values[t, :].tolist(),
+                'values': values_filled[t, :].tolist(),
                 'masks': (1 - missing_mask[t, :]).tolist(),  # 1 = observed, 0 = missing
                 'deltas': deltas[t, :].tolist(),
                 'forwards': np.zeros(n_features).tolist(),  # Not used by model, set to zeros
-                'evals': values[t, :].tolist(),  # Ground truth values for evaluation
+                'evals': ground_truth[t, :].tolist(),  # Ground truth values for evaluation (no NaN)
                 'eval_masks': eval_mask[t, :].tolist()  # 1 = evaluate this value
             }
             sequence.append(timestep)
@@ -167,7 +212,7 @@ def collate_fn(recs):
 
     ret_dict = {'forward': to_tensor_dict(forward), 'backward': to_tensor_dict(backward)}
 
-    # labels and is_train as CPU tensors
+    # is_train as CPU tensor (labels not needed for imputation-only task)
     ret_dict['is_train'] = torch.FloatTensor([x['is_train'] for x in recs])
 
     return ret_dict
