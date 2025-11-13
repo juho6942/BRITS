@@ -21,6 +21,7 @@ import models
 import argparse
 import data_loader
 import pandas as pd
+import beijing_handler
 try:
     import ujson as json
 except Exception:
@@ -46,7 +47,7 @@ args = parser.parse_args()
 def train(model):
     optimizer = optim.Adam(model.parameters(), lr = 1e-3)
 
-    data_iter = data_loader.get_loader(batch_size = args.batch_size)
+    data_iter = beijing_handler.get_loader(batch_size = args.batch_size)
 
     for epoch in range(args.epochs):
         model.train()

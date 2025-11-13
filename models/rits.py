@@ -21,7 +21,7 @@ except Exception:
             return None
 from sklearn import metrics
 
-SEQ_LEN = 49
+SEQ_LEN = 36
 RNN_HID_SIZE = 64
 
 def binary_cross_entropy_with_logits(input, target, weight=None, size_average=True, reduce=True):
@@ -98,20 +98,20 @@ class TemporalDecay(nn.Module):
         return gamma
 
 class Model(nn.Module):
-    def __init__(self):
+    def __init__(self,features=35):
         super(Model, self).__init__()
-        self.build()
+        self.build(features)
 
-    def build(self):
-        self.rnn_cell = nn.LSTMCell(35 * 2, RNN_HID_SIZE)
+    def build(self, features):
+        self.rnn_cell = nn.LSTMCell(features * 2, RNN_HID_SIZE)
 
-        self.temp_decay_h = TemporalDecay(input_size = 35, output_size = RNN_HID_SIZE, diag = False)
-        self.temp_decay_x = TemporalDecay(input_size = 35, output_size = 35, diag = True)
+        self.temp_decay_h = TemporalDecay(input_size = features, output_size = RNN_HID_SIZE, diag = False)
+        self.temp_decay_x = TemporalDecay(input_size = features, output_size = features, diag = True)
 
-        self.hist_reg = nn.Linear(RNN_HID_SIZE, 35)
-        self.feat_reg = FeatureRegression(35)
+        self.hist_reg = nn.Linear(RNN_HID_SIZE, features)
+        self.feat_reg = FeatureRegression(features)
 
-        self.weight_combine = nn.Linear(35 * 2, 35)
+        self.weight_combine = nn.Linear(features * 2, features)
 
         self.dropout = nn.Dropout(p = 0.25)
         self.out = nn.Linear(RNN_HID_SIZE, 1)

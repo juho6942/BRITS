@@ -20,6 +20,8 @@ import utils
 import models
 import argparse
 import data_loader
+import beijing_handler
+
 import pandas as pd
 try:
     import ujson as json
