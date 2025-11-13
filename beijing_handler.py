@@ -168,7 +168,6 @@ def collate_fn(recs):
     ret_dict = {'forward': to_tensor_dict(forward), 'backward': to_tensor_dict(backward)}
 
     # labels and is_train as CPU tensors
-    ret_dict['labels'] = torch.FloatTensor([x['label'] for x in recs])
     ret_dict['is_train'] = torch.FloatTensor([x['is_train'] for x in recs])
 
     return ret_dict
