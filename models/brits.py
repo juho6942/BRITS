@@ -23,20 +23,21 @@ except Exception:
         def set_trace():
             return None
 
-SEQ_LEN = 36
 RNN_HID_SIZE = 64
 
 
 class Model(nn.Module):
-    def __init__(self, imputation_only=True):
+    def __init__(self, imputation_only=True, features=11, seq_len=36):
         super(Model, self).__init__()
         self.imputation_only = imputation_only
+        self.features = features
+        self.seq_len = seq_len
         self.build()
 
     def build(self):
-        # Pass imputation_only to RITS models
-        self.rits_f = rits.Model(features=11, imputation_only=self.imputation_only)
-        self.rits_b = rits.Model(features=11, imputation_only=self.imputation_only)
+        # Pass imputation_only and seq_len to RITS models
+        self.rits_f = rits.Model(features=self.features, imputation_only=self.imputation_only, seq_len=self.seq_len)
+        self.rits_b = rits.Model(features=self.features, imputation_only=self.imputation_only, seq_len=self.seq_len)
 
     def forward(self, data):
         ret_f = self.rits_f(data, 'forward')

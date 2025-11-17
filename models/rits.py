@@ -98,9 +98,10 @@ class TemporalDecay(nn.Module):
         return gamma
 
 class Model(nn.Module):
-    def __init__(self, features=35, imputation_only=False):
+    def __init__(self, features=35, imputation_only=False, seq_len=49):
         super(Model, self).__init__()
         self.imputation_only = imputation_only
+        self.seq_len = seq_len
         self.build(features)
 
     def build(self, features):
@@ -153,7 +154,7 @@ class Model(nn.Module):
 
         imputations = []
 
-        for t in range(SEQ_LEN):
+        for t in range(self.seq_len):
             x = values[:, t, :]
             m = masks[:, t, :]
             d = deltas[:, t, :]

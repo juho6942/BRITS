@@ -20,7 +20,6 @@ import utils
 import models
 import argparse
 import data_loader
-import beijing_handler
 
 import pandas as pd
 try:
@@ -48,14 +47,20 @@ args = parser.parse_args()
 def train(model):
     optimizer = optim.Adam(model.parameters(), lr = 1e-3)
 
-    data_iter = data_loader.get_loader(batch_size = args.batch_size)
+    # Separate train and test loaders
+    train_iter = data_loader.get_loader(batch_size = args.batch_size, shuffle=True, is_train=True)
+    test_iter = data_loader.get_loader(batch_size = args.batch_size, shuffle=False, is_train=False)
+    
+    #print(f"Training samples: {len(train_iter.dataset) - len(train_iter.dataset.val_indices)}")  # 350
+    #print(f"Test samples: {len(train_iter.dataset.val_indices)}")  # 50
 
     for epoch in range(args.epochs):
         model.train()
 
         run_loss = 0.0
 
-        for idx, data in enumerate(data_iter):
+        # Only iterate over TRAINING data
+        for idx, data in enumerate(train_iter):
             data = utils.to_var(data)
             ret = model.run_on_batch(data, optimizer)
 
@@ -73,11 +78,12 @@ def train(model):
             run_loss += loss_val
 
             # Python3 print
-            print('\r Progress epoch {}, {:.2f}%, average loss {}'.format(epoch, (idx + 1) * 100.0 / len(data_iter), run_loss / (idx + 1.0)), end='')
-        print(f"Allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+            print('\r Progress epoch {}, {:.2f}%, average loss {}'.format(epoch, (idx + 1) * 100.0 / len(train_iter), run_loss / (idx + 1.0)), end='')
+        print(f"\nAllocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
         print(f"Cached:    {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
         if epoch % 1 == 0:
-            evaluate(model, data_iter)
+            # Evaluate on TEST data only
+            evaluate(model, test_iter)
 
 def evaluate(model, val_iter):
     model.eval()
@@ -94,7 +100,6 @@ def evaluate(model, val_iter):
 
         pred = ret['predictions'].data.cpu().numpy()
         label = ret['labels'].data.cpu().numpy()
-        is_train = ret['is_train'].data.cpu().numpy()
 
         eval_masks = ret['eval_masks'].data.cpu().numpy()
         eval_ = ret['evals'].data.cpu().numpy()
@@ -103,10 +108,7 @@ def evaluate(model, val_iter):
         evals += eval_[np.where(eval_masks == 1)].tolist()
         imputations += imputation[np.where(eval_masks == 1)].tolist()
 
-        # collect test label & prediction
-        pred = pred[np.where(is_train == 0)]
-        label = label[np.where(is_train == 0)]
-
+        # All samples in test_iter are test samples, no filtering needed
         labels += label.tolist()
         preds += pred.tolist()
 
@@ -125,7 +127,8 @@ def run():
     if torch is None:
         raise RuntimeError('PyTorch is not installed or could not be imported. Please install torch to run this script.')
 
-    model = getattr(models, args.model).Model(imputation_only=False)
+    # PhysioNet data has 35 features and 49 timesteps
+    model = getattr(models, args.model).Model(imputation_only=False, features=35, seq_len=49)
 
     if torch.cuda.is_available():
         model = model.cuda()

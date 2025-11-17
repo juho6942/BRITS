@@ -20,7 +20,7 @@ class MySet(Dataset):
             self.content = f.readlines()
 
         indices = np.arange(len(self.content))
-        val_indices = np.random.choice(indices, len(self.content) // 5)
+        val_indices = indices[350:]
 
         self.val_indices = set(val_indices.tolist())
 
@@ -67,14 +67,45 @@ def collate_fn(recs):
 
     return ret_dict
 
-def get_loader(batch_size = 64, shuffle = True):
+def get_loader(batch_size = 64, shuffle = True, is_train=None):
+    """
+    Get DataLoader for train or test set.
+    
+    Args:
+        batch_size: Number of samples per batch
+        shuffle: Whether to shuffle data
+        is_train: If True, only train data. If False, only test data. If None, all data.
+    """
     data_set = MySet()
-    data_iter = DataLoader(dataset = data_set, \
-                              batch_size = batch_size, \
-                              num_workers = 4, \
-                              shuffle = shuffle, \
-                              pin_memory = True, \
-                              collate_fn = collate_fn
+    
+    # Filter indices based on is_train flag
+    if is_train is True:
+        # Only training samples (indices 0-349)
+        indices = [i for i in range(len(data_set)) if i not in data_set.val_indices]
+    elif is_train is False:
+        # Only test samples (indices 350-399)
+        indices = list(data_set.val_indices)
+    else:
+        # All samples (original behavior)
+        indices = list(range(len(data_set)))
+    
+    # Create sampler for subset
+    from torch.utils.data import SubsetRandomSampler, SequentialSampler
+    if shuffle and is_train is not None:
+        sampler = SubsetRandomSampler(indices)
+    elif is_train is not None:
+        sampler = SequentialSampler(indices)
+    else:
+        sampler = None
+    
+    data_iter = DataLoader(
+        dataset = data_set,
+        batch_size = batch_size,
+        num_workers = 4,
+        sampler = sampler if is_train is not None else None,
+        shuffle = shuffle if is_train is None else False,
+        pin_memory = True,
+        collate_fn = collate_fn
     )
 
     return data_iter

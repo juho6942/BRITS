@@ -5,6 +5,9 @@ try:
     import torch.nn.functional as F
     import torch.optim as optim
     from torch.optim.lr_scheduler import StepLR
+    import os
+    import glob
+
 except Exception:
     # Torch may not be installed in the editor environment; allow file to be read/checked.
     torch = None
@@ -53,7 +56,8 @@ def train(model):
     
     print(f"Training windows: {len(train_iter.dataset)}")
     print(f"Testing windows: {len(test_iter.dataset)}\n")
-    
+    patience = 10
+    patience_counter = 0
     best_mae = float('inf')
 
     for epoch in range(args.epochs):
@@ -90,22 +94,42 @@ def train(model):
             print(f'\n--- Evaluation at Epoch {epoch} ---')
             mae, mre = evaluate(model, test_iter, denormalize=True)
             
-            # Save best model
             if mae < best_mae:
                 best_mae = mae
-                torch.save(model.state_dict(), f'best_model_{args.model}_epoch{epoch}.pth')
-                print(f'✓ New best model saved! MAE: {mae:.6f}\n')
+                best_epoch = epoch  # ← Remember best epoch
+                patience_counter = 0
+                old_models = glob.glob(f'best_model_{args.model}_epoch*.pth')
+                for old_model in old_models:
+                    try:
+                        os.remove(old_model)
+                        print(f'Deleted old model: {old_model}')
+                    except Exception as e:
+                        print(f'Could not delete {old_model}: {e}')
+                
+                # Save new best model with epoch number
+                model_path = f'best_model_{args.model}_epoch{epoch}.pth'
+                torch.save(model.state_dict(), model_path)
+                print(f'✓ New best model saved! MAE: {mae:.6f} → {model_path}\n')
             else:
-                print()  # Empty line for readability
+                patience_counter += 1
+                print(f'No improvement ({patience_counter}/{patience})\n')
+                
+                if patience_counter >= patience:
+                    print(f'\n⚠ Early stopping triggered at epoch {epoch}')
+                    print(f'Best model was from epoch {best_epoch} with MAE: {best_mae:.6f}')
+                    break
     
-    # Final evaluation and save predictions
+    # ✅ LOAD BEST MODEL before final evaluation
     print('\n' + '='*60)
-    print('FINAL EVALUATION ON TEST SET')
+    print(f'LOADING BEST MODEL (Epoch {best_epoch}, MAE: {best_mae:.6f})')
     print('='*60)
-    evaluate(model, test_iter, denormalize=True)
+    model.load_state_dict(torch.load(f'best_model_{args.model}_epoch{best_epoch}.pth'))
     
-    # Save predictions to CSV
-    print('\nGenerating predictions file...')
+    # Now these use the BEST model
+    print('\n--- Final Evaluation on Best Model ---')
+    mae, mre = evaluate(model, test_iter, denormalize=True)
+    
+    print('\nGenerating predictions file with best model...')
     predict_and_save(model, test_iter, output_file=f'predictions_{args.model}.csv')
 
 def evaluate(model, val_iter, denormalize=True):
@@ -169,61 +193,67 @@ def evaluate(model, val_iter, denormalize=True):
                             imputation_dict[key].append(imputation[b, t, f])
     
     # Average multiple imputations for each unique timestep
-    evals = []
-    imputations = []
+    keys = np.array(list(imputation_dict.keys()))  # Shape: [N, 2] where N=6625
+    timesteps = keys[:, 0]  # All timesteps
+    feature_indices = keys[:, 1].astype(int)  # All feature indices
     
-    for key in sorted(imputation_dict.keys()):  # Sort for consistent ordering
-        evals.append(eval_dict[key])
-        # Average all imputations from different windows containing this timestep
-        imputations.append(np.mean(imputation_dict[key]))
+    # Get averaged predictions and ground truths
+    evals = np.array([eval_dict[tuple(k)] for k in keys])
+    imputations = np.array([np.mean(imputation_dict[tuple(k)]) for k in keys])
     
-    evals = np.asarray(evals)
-    imputations = np.asarray(imputations)
+    print(f"Evaluated {len(imputation_dict)} unique masked values")
+    print(f"Average imputations per value: {np.mean([len(v) for v in imputation_dict.values()]):.2f}")
     
-    # Denormalize if requested
     if denormalize:
-        # Get normalization parameters from dataset
         mean, std = val_iter.dataset.get_normalization_params()
+        feature_cols = val_iter.dataset.feature_cols
         
-        # Reshape to (n_samples, n_features) for proper broadcasting
-        n_samples = len(evals) // len(mean)
-        evals_2d = evals.reshape(-1, len(mean))
-        imputations_2d = imputations.reshape(-1, len(mean))
+        # ✅ VECTORIZED: Create arrays of means and stds aligned with feature_indices
+        # Build lookup arrays for vectorized operations
+        mean_array = np.array([mean[feature_cols[i]] for i in range(len(feature_cols))])
+        std_array = np.array([std[feature_cols[i]] for i in range(len(feature_cols))])
         
-        # Denormalize: original = normalized * std + mean
-        evals_denorm = evals_2d * std.values + mean.values
-        imputations_denorm = imputations_2d * std.values + mean.values
+        # ✅ VECTORIZED DENORMALIZATION: Use feature_indices to select correct mean/std
+        evals_denorm = evals * std_array[feature_indices] + mean_array[feature_indices]
+        imputations_denorm = imputations * std_array[feature_indices] + mean_array[feature_indices]
         
-        # Flatten back
-        evals_denorm = evals_denorm.flatten()
-        imputations_denorm = imputations_denorm.flatten()
+        # Calculate metrics
+        errors_denorm = np.abs(evals_denorm - imputations_denorm)
+        mae = errors_denorm.mean()
+        mre = errors_denorm.sum() / np.abs(evals_denorm).sum()
         
-        # Calculate metrics on denormalized values
-        mae = np.abs(evals_denorm - imputations_denorm).mean()
-        mre = np.abs(evals_denorm - imputations_denorm).sum() / np.abs(evals_denorm).sum()
-        
-        print(f'Evaluated {len(evals)} unique masked values')
-        print(f'Average imputations per value: {np.mean([len(v) for v in imputation_dict.values()]):.2f}')
         print(f'MAE (original scale): {mae:.4f}')
         print(f'MRE (original scale): {mre:.6f}')
         
-        # Also show normalized metrics for comparison
-        mae_norm = np.abs(evals - imputations).mean()
-        mre_norm = np.abs(evals - imputations).sum() / np.abs(evals).sum()
+        # Also compute normalized metrics
+        errors_norm = np.abs(evals - imputations)
+        mae_norm = errors_norm.mean()
+        mre_norm = errors_norm.sum() / np.abs(evals).sum()
+        
         print(f'MAE (normalized): {mae_norm:.6f}')
         print(f'MRE (normalized): {mre_norm:.6f}')
         
-    else:
-        # Calculate metrics on normalized values (z-scores)
-        mae = np.abs(evals - imputations).mean()
-        mre = np.abs(evals - imputations).sum() / np.abs(evals).sum()
+        # ✅ BONUS: Per-feature statistics using vectorized operations
+        print('\n=== Summary by Feature ===')
+        for f_idx in range(len(feature_cols)):
+            mask = feature_indices == f_idx
+            if mask.sum() > 0:
+                feat_mae = errors_denorm[mask].mean()
+                feat_count = mask.sum()
+                print(f'{feature_cols[f_idx]:8s}: MAE = {feat_mae:.4f} (n={feat_count})')
         
-        print(f'Evaluated {len(evals)} unique masked values')
-        print(f'Average imputations per value: {np.mean([len(v) for v in imputation_dict.values()]):.2f}')
+        return mae, mre
+    
+    else:
+        # No denormalization
+        errors = np.abs(evals - imputations)
+        mae = errors.mean()
+        mre = errors.sum() / np.abs(evals).sum()
+        
         print(f'MAE: {mae:.6f}')
         print(f'MRE: {mre:.6f}')
-    
-    return mae, mre
+        
+        return mae, mre
 
 def predict_and_save(model, val_iter, output_file='predictions.csv'):
     """
@@ -302,8 +332,8 @@ def run():
     if torch is None:
         raise RuntimeError('PyTorch is not installed or could not be imported. Please install torch to run this script.')
 
-    # Create model in imputation-only mode (no classification task)
-    model = getattr(models, args.model).Model(imputation_only=True)
+    # Create model in imputation-only mode (Beijing has 11 features, 36 timesteps)
+    model = getattr(models, args.model).Model(imputation_only=True, features=11, seq_len=36)
 
     if torch.cuda.is_available():
         model = model.cuda()

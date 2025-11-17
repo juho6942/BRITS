@@ -43,8 +43,13 @@ def create_fake_missing(data, missing_mask, missing_rate=0.11):
     return fake_missing, pd.DataFrame(new_mask,columns=feature_cols)
 
 
-data = load_beijing_data('./Data/beijing_airquality/PRSA_Data_Aotizhongxin_20130301-20170228.csv')
-data_normed,data_std, data_mean, original_missing_mask = norm_data(data)
-fake_missing_data, fake_missing_mask = create_fake_missing(data, original_missing_mask, missing_rate=0.2)
-
-print("Data loading and preprocessing complete.")
+# Module-level test code - only runs when this file is executed directly
+if __name__ == '__main__':
+    data = load_beijing_data('./Data/beijing_airquality/PRSA_Data_Aotizhongxin_20130301-20170228.csv')
+    data_normed,data_std, data_mean, original_missing_mask = norm_data(data)
+    fake_missing_data, fake_missing_mask = create_fake_missing(data, original_missing_mask, missing_rate=0.2)
+    
+    print("Data loading and preprocessing complete.")
+    print(f"Data shape: {data_normed.shape}")
+    print(f"Missing values: {original_missing_mask.sum().sum()}")
+    print(f"Fake missing values: {fake_missing_mask.sum().sum()}")
