@@ -21,7 +21,6 @@ except Exception:
             return None
 from sklearn import metrics
 
-SEQ_LEN = 36
 RNN_HID_SIZE = 64
 
 def binary_cross_entropy_with_logits(input, target, weight=None, size_average=True, reduce=True):
@@ -193,13 +192,13 @@ class Model(nn.Module):
             y_loss = binary_cross_entropy_with_logits(y_h, labels, reduce = False)
             y_loss = torch.sum(y_loss * is_train) / (torch.sum(is_train) + 1e-5)
             y_h = F.sigmoid(y_h)
-            total_loss = x_loss / SEQ_LEN + y_loss * 0.3
+            total_loss = x_loss / self.seq_len + y_loss * 0.3
         else:
             # Imputation-only: no classification
             y_h = torch.zeros((values.size()[0], 1))
             if torch.cuda.is_available():
                 y_h = y_h.cuda()
-            total_loss = x_loss / SEQ_LEN
+            total_loss = x_loss / self.seq_len
 
         return {'loss': total_loss, 'predictions': y_h,\
                 'imputations': imputations, 'labels': labels, 'is_train': is_train,\

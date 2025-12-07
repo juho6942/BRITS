@@ -17,6 +17,10 @@ except Exception:
     StepLR = None
 
 import numpy as np
+try:
+    import matplotlib.pyplot as plt
+except Exception:
+    plt = None
 
 import time
 import utils
@@ -60,77 +64,103 @@ def train(model):
     patience_counter = 0
     best_mae = float('inf')
 
-    for epoch in range(args.epochs):
-        model.train()
+    train_loss_history = []
+    eval_mae_norm_history = []
+    best_epoch = 0
 
-        run_loss = 0.0
+    try:
+        for epoch in range(args.epochs):
+            model.train()
 
-        
-        for idx, data in enumerate(train_iter):
-            data = utils.to_var(data)
-            ret = model.run_on_batch(data, optimizer)
+            run_loss = 0.0
 
-            loss_val = None
-            if hasattr(ret['loss'], 'item'):
-                loss_val = ret['loss'].item()
-            else:
-                try:
-                    loss_val = ret['loss'].data[0]
-                except Exception:
-                    loss_val = float(ret['loss'])
-
-            run_loss += loss_val
-
-            print('\r Progress epoch {}, {:.2f}%, average loss {}'.format(epoch, (idx + 1) * 100.0 / len(train_iter), run_loss / (idx + 1.0)), end='')
-        
-        avg_loss = run_loss / len(train_iter)
-        print(f'\n[Epoch {epoch}] Average Training Loss: {avg_loss:.6f}')
-        
-        if torch.cuda.is_available():
-            print(f"GPU Memory - Allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB, Cached: {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
-        
-         
-        if epoch % 1 == 0:
-            print(f'\n--- Evaluation at Epoch {epoch} ---')
-            mae, mre = evaluate(model, test_iter, denormalize=True)
             
-            if mae < best_mae:
-                best_mae = mae
-                best_epoch = epoch  # ← Remember best epoch
-                patience_counter = 0
-                old_models = glob.glob(f'best_model_{args.model}_epoch*.pth')
-                for old_model in old_models:
+            for idx, data in enumerate(train_iter):
+                data = utils.to_var(data)
+                ret = model.run_on_batch(data, optimizer)
+
+                loss_val = None
+                if hasattr(ret['loss'], 'item'):
+                    loss_val = ret['loss'].item()
+                else:
                     try:
-                        os.remove(old_model)
-                        print(f'Deleted old model: {old_model}')
-                    except Exception as e:
-                        print(f'Could not delete {old_model}: {e}')
+                        loss_val = ret['loss'].data[0]
+                    except Exception:
+                        loss_val = float(ret['loss'])
+
+                run_loss += loss_val
+
+                print('\r Progress epoch {}, {:.2f}%, average loss {}'.format(epoch, (idx + 1) * 100.0 / len(train_iter), run_loss / (idx + 1.0)), end='')
+            
+            avg_loss = run_loss / len(train_iter)
+            print(f'\n[Epoch {epoch}] Average Training Loss: {avg_loss:.6f}')
+            train_loss_history.append(avg_loss)
+            
+            if torch.cuda.is_available():
+                print(f"GPU Memory - Allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB, Cached: {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
+            
+            
+            if epoch % 1 == 0:
+                print(f'\n--- Evaluation at Epoch {epoch} ---')
+                mae, mre, mae_norm = evaluate(model, test_iter, denormalize=True)
+                eval_mae_norm_history.append(mae_norm)
                 
-                # Save new best model with epoch number
-                model_path = f'best_model_{args.model}_epoch{epoch}.pth'
-                torch.save(model.state_dict(), model_path)
-                print(f'✓ New best model saved! MAE: {mae:.6f} → {model_path}\n')
-            else:
-                patience_counter += 1
-                print(f'No improvement ({patience_counter}/{patience})\n')
-                
-                if patience_counter >= patience:
-                    print(f'\n⚠ Early stopping triggered at epoch {epoch}')
-                    print(f'Best model was from epoch {best_epoch} with MAE: {best_mae:.6f}')
-                    break
+                if mae < best_mae:
+                    best_mae = mae
+                    best_epoch = epoch  # ← Remember best epoch
+                    patience_counter = 0
+                    old_models = glob.glob(f'best_model_{args.model}_epoch*.pth')
+                    for old_model in old_models:
+                        try:
+                            os.remove(old_model)
+                            print(f'Deleted old model: {old_model}')
+                        except Exception as e:
+                            print(f'Could not delete {old_model}: {e}')
+                    
+                    # Save new best model with epoch number
+                    model_path = f'best_model_{args.model}_epoch{epoch}.pth'
+                    torch.save(model.state_dict(), model_path)
+                    print(f'✓ New best model saved! MAE: {mae:.6f} → {model_path}\n')
+                else:
+                    patience_counter += 1
+                    print(f'No improvement ({patience_counter}/{patience})\n')
+                    
+                    if patience_counter >= patience:
+                        print(f'\n⚠ Early stopping triggered at epoch {epoch}')
+                        print(f'Best model was from epoch {best_epoch} with MAE: {best_mae:.6f}')
+                        break
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user.")
     
+    
+    plt.figure(figsize=(10, 6))
+    # plt.plot(train_loss_history, label='Train Loss')
+    plt.plot(eval_mae_norm_history, label='Eval MAE')
+    plt.xlabel('Epoch')
+    plt.ylabel('Value')
+    plt.title('Evaluation MAE')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(f'loss_graph_beijing{args.model}.png')
+    
+
     # ✅ LOAD BEST MODEL before final evaluation
-    print('\n' + '='*60)
-    print(f'LOADING BEST MODEL (Epoch {best_epoch}, MAE: {best_mae:.6f})')
-    print('='*60)
-    model.load_state_dict(torch.load(f'best_model_{args.model}_epoch{best_epoch}.pth'))
+    if best_mae != float('inf'):
+        print('\n' + '='*60)
+        print(f'LOADING BEST MODEL (Epoch {best_epoch}, MAE: {best_mae:.6f})')
+        print('='*60)
     
-    # Now these use the BEST model
-    print('\n--- Final Evaluation on Best Model ---')
-    mae, mre = evaluate(model, test_iter, denormalize=True)
-    
-    print('\nGenerating predictions file with best model...')
-    predict_and_save(model, test_iter, output_file=f'predictions_{args.model}.csv')
+        try:
+            model.load_state_dict(torch.load(f'best_model_{args.model}_epoch{best_epoch}.pth'))
+            
+            # Now these use the BEST model
+            print('\n--- Final Evaluation on Best Model ---')
+            mae, mre, _ = evaluate(model, test_iter, denormalize=True)
+            
+            print('\nGenerating predictions file with best model...')
+            predict_and_save(model, test_iter, output_file=f'predictions_{args.model}.csv')
+        except Exception as e:
+            print(f"Could not load best model or evaluate: {e}")
 
 def evaluate(model, val_iter, denormalize=True):
     """
@@ -242,7 +272,7 @@ def evaluate(model, val_iter, denormalize=True):
                 feat_count = mask.sum()
                 print(f'{feature_cols[f_idx]:8s}: MAE = {feat_mae:.4f} (n={feat_count})')
         
-        return mae, mre
+        return mae, mre, mae_norm
     
     else:
         # No denormalization
@@ -253,7 +283,7 @@ def evaluate(model, val_iter, denormalize=True):
         print(f'MAE: {mae:.6f}')
         print(f'MRE: {mre:.6f}')
         
-        return mae, mre
+        return mae, mre, mae
 
 def predict_and_save(model, val_iter, output_file='predictions.csv'):
     """

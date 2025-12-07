@@ -2,10 +2,17 @@
 The source codes of RITS-I, RITS, BRITS-I, BRITS for health-care data imputation/classification
 
 To run the code:
+For test file:
+python main.py --epochs 100 --batch_size 32 --model brits
+For beijing airquality
+python main_beijing.py --epochs 100 --batch_size 32 --model brits
+For physionet2018 dataset (sepsis):
+python main_spesis.py --epochs 100 --batch_size 32 --model brits
 
-python main.py --epochs 1000 --batch_size 32 --model brist
 
 # Data Format
+## Test data physionet 2012
+Test data from physionet 2012:
 In json folder, we provide the sample data (400 patients).
 The data format is as follows:
 
@@ -16,21 +23,12 @@ The data format is as follows:
     * label
 
     'forward' and 'backward' is a list of python dicts, which represents the input sequence in forward/backward directions. As an example for forward direction, each dict in the sequence contains:
-    * values: list, indicating x_t \in R^d (after elimination)
-    * masks: list, indicating m_t \in R^d
-    * deltas: list, indicating \delta_t \in R^d
+    * values: list, indicating $x_t \in R^d$ (after elimination)
+    * masks: list, indicating $m_t \in R^d$
+    * deltas: list, indicating $\delta_t \in R^d$
     * forwards: list, the forward imputation, only used in GRU_D, can be any numbers in our model
-    * evals: list, indicating x_t \in R^d (before elimination)
+    * evals: list, indicating $x_t \in R^d$ (before elimination)
     * eval_masks: list, indicating whether each value is an imputation ground-truth
 
-# Data Download Links
+# Beijing
 
-* Air Quality Data:
-URL: https://www.microsoft.com/en-us/research/wp-content/uploads/2016/06/STMVL-Release.zip
-
-* Health-care Data:
-URL: https://physionet.org/challenge/2012/
-We use the test-a.zip in our experiment.
-
-* Human Activity Data:
-URL: https://archive.ics.uci.edu/ml/datasets/Localization+Data+for+Person+Activity

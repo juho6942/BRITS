@@ -14,6 +14,10 @@ except Exception:
     StepLR = None
 
 import numpy as np
+try:
+    import matplotlib.pyplot as plt
+except Exception:
+    plt = None
 
 import time
 import utils
@@ -42,6 +46,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--epochs', type = int, default = 1000)
 parser.add_argument('--batch_size', type = int, default = 32)
 parser.add_argument('--model', type = str)
+#parser.add_argument('--impute_only', type = bool, default = False)
 args = parser.parse_args()
 
 def train(model):
@@ -53,6 +58,9 @@ def train(model):
     
     #print(f"Training samples: {len(train_iter.dataset) - len(train_iter.dataset.val_indices)}")  # 350
     #print(f"Test samples: {len(train_iter.dataset.val_indices)}")  # 50
+
+    train_loss_history = []
+    eval_mae_history = []
 
     for epoch in range(args.epochs):
         model.train()
@@ -79,11 +87,32 @@ def train(model):
 
             # Python3 print
             print('\r Progress epoch {}, {:.2f}%, average loss {}'.format(epoch, (idx + 1) * 100.0 / len(train_iter), run_loss / (idx + 1.0)), end='')
+        
+        avg_loss = run_loss / len(train_iter)
+        train_loss_history.append(avg_loss)
+
         print(f"\nAllocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
         print(f"Cached:    {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
         if epoch % 1 == 0:
             # Evaluate on TEST data only
-            evaluate(model, test_iter)
+            mae = evaluate(model, test_iter)
+            eval_mae_history.append(mae)
+
+    # Plotting
+    if plt:
+        try:
+            plt.figure(figsize=(10, 6))
+            # plt.plot(train_loss_history, label='Train Loss')
+            plt.plot(eval_mae_history, label='Eval MAE')
+            plt.xlabel('Epoch')
+            plt.ylabel('Value')
+            plt.title('Evaluation MAE')
+            plt.legend()
+            plt.grid(True)
+            plt.savefig(f'loss_graph_{args.model}.png')
+            print(f'Graph saved to loss_graph_{args.model}.png')
+        except Exception as e:
+            print(f'Could not generate graph: {e}')
 
 def evaluate(model, val_iter):
     model.eval()
@@ -122,13 +151,14 @@ def evaluate(model, val_iter):
 
     print('MAE', np.abs(evals - imputations).mean())
     print('MRE', np.abs(evals - imputations).sum() / np.abs(evals).sum())
+    return np.abs(evals - imputations).mean()
 
 def run():
     if torch is None:
         raise RuntimeError('PyTorch is not installed or could not be imported. Please install torch to run this script.')
 
     # PhysioNet data has 35 features and 49 timesteps
-    model = getattr(models, args.model).Model(imputation_only=False, features=35, seq_len=49)
+    model = getattr(models, args.model).Model(imputation_only=True, features=35, seq_len=49)
 
     if torch.cuda.is_available():
         model = model.cuda()
