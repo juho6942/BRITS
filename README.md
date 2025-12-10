@@ -26,9 +26,12 @@ The data format is as follows:
     * values: list, indicating $x_t \in R^d$ (after elimination)
     * masks: list, indicating $m_t \in R^d$
     * deltas: list, indicating $\delta_t \in R^d$
-    * forwards: list, the forward imputation, only used in GRU_D, can be any numbers in our model
     * evals: list, indicating $x_t \in R^d$ (before elimination)
     * eval_masks: list, indicating whether each value is an imputation ground-truth
 
-# Beijing
+## Beijing
+Data Used for project can be found in Data/beijing_airquality/PRSA_Data_Aotizhongxin_20130301-20170228.csv. https://archive.ics.uci.edu/dataset/501/beijing+multi+site+air+quality+data is the original source of the data. Beijing handler and the makefile.py are files that make the beijing data be in the same form as the test data for model input.
+
+## Physionet 2019
+Physionet2019 data can be found in the training_setA folder where 20000 patients are. For our experiment we used the first 5000 patients and then from those selected patients with sequence length less than or equal to 50. Shorter sequences were padded and then same data processing steps were taken as in other datasets.
 

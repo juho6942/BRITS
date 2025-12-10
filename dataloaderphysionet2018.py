@@ -15,10 +15,18 @@ class PhysioNetDataset(Dataset):
         self.evaluation = pd.read_csv('Data/combined_eval_mask.csv')
         self.features = ['HR', 'O2Sat', 'Temp', 'SBP', 'MAP', 'DBP', 'Resp', 'BaseExcess', 'HCO3', 'FiO2', 'pH', 'PaCO2', 'SaO2', 'AST', 'BUN', 'Alkalinephos', 'Calcium', 'Chloride', 'Creatinine', 'Bilirubin_direct', 'Glucose', 'Lactate', 'Magnesium', 'Phosphate', 'Potassium', 'Bilirubin_total', 'TroponinI', 'Hct', 'Hgb', 'PTT', 'WBC', 'Fibrinogen', 'Platelets']
         
-        self.mean,self.std = get_meanstd(self.data[self.features].values, 1 - (self.realmissing[self.features].values + self.evaluation[self.features].values))
-        # Process PatientID
         for df in [self.data, self.realmissing, self.evaluation]:
-            df['PatientID'] = df['PatientID'].astype(str).str.replace('p', '').astype(int)
+            if df['PatientID'].dtype == object:
+                df['PatientID'] = df['PatientID'].astype(str).str.replace('p', '').astype(int)
+        
+        train_mask = self.data['PatientID'] < 4000
+        train_data_values = self.data[train_mask][self.features].values
+        train_realmissing = self.realmissing[train_mask][self.features].values
+        train_evaluation = self.evaluation[train_mask][self.features].values
+        
+        train_observed_mask = 1-(train_realmissing + train_evaluation)
+    
+        self.mean, self.std = get_meanstd(train_data_values, train_observed_mask)
             
         if is_train:
             self.data = self.data[self.data['PatientID'] < 4000]
@@ -49,33 +57,28 @@ class PhysioNetDataset(Dataset):
         realmissing = self.realmissing_grouped.get_group(patient_id)
         evaluation = self.evaluation_grouped.get_group(patient_id)
         
-        # Extract label (assuming SepsisLabel is constant or we take max)
         label = sample['SepsisLabel'].max()
         
         values = sample[self.features].values
         rm = realmissing[self.features].values
         ev = evaluation[self.features].values
         
-        # Masks: 1 if observed, 0 if missing (real missing or eval mask)
-        masks = 1 - (rm + ev)
-        
+        masks = 1- (rm + ev)
         # Deltas
         deltas = self._create_deltas(values, masks)
-        
         # Backward
         values_b = values[::-1]
         masks_b = masks[::-1]
         deltas_b = self._create_deltas(values_b, masks_b)
-        
         # Evals
         evals = sample[self.features].values
         eval_masks = ev
         
         return {
             'forward': {
-                'values': values,
+                'values':values,
                 'masks': masks,
-                'deltas': deltas,
+                'deltas':deltas,
                 'evals': evals,
                 'eval_masks': eval_masks
             },
@@ -91,7 +94,6 @@ class PhysioNetDataset(Dataset):
         }
     
     def _create_deltas(self, values, masks):
-        """Compute time deltas for each feature."""
         deltas = np.zeros_like(values)
         n_timesteps, n_features = values.shape
         
@@ -114,24 +116,15 @@ class PhysioNetDataset(Dataset):
         return self.mean, self.std
 
 def get_meanstd(data, masks):
-    """Normalize data to zero mean and unit variance, ignoring missing values."""
-    # data contains 0 for missing values. masks contains 0 for missing values.
-    # We need to convert masked values to NaN so nanmean/nanstd ignores them.
     
     data_masked = data.copy()
     data_masked[masks == 0] = np.nan
-    
-    # Calculate mean and std per feature (axis=0)
-    # Use a large epsilon to avoid issues with empty slices if a feature is completely missing
     with np.errstate(all='ignore'):
         means = np.nanmean(data_masked, axis=0)
         stds = np.nanstd(data_masked, axis=0)
-    
-    # Handle features that are completely missing (NaN mean/std)
+ 
     means = np.nan_to_num(means, nan=0.0)
     stds = np.nan_to_num(stds, nan=1.0)
-
-    # Avoid division by zero
     if np.isscalar(stds):
         if stds == 0:
             stds = 1.0
@@ -165,14 +158,7 @@ def collate_fn(recs):
     return ret_dict
 
 def get_loader(batch_size = 64, shuffle = True, is_train=True):
-    """
-    Get DataLoader for train or test set.
-    
-    Args:
-        batch_size: Number of samples per batch
-        shuffle: Whether to shuffle data
-        is_train: If True, only train data. If False, only test data. If None, all data.
-    """
+
     dataset = PhysioNetDataset('Data/combined_patient_data.csv', is_train=is_train)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn)
     return loader
